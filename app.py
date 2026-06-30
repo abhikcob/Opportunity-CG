@@ -37,7 +37,8 @@ def show_save_error(action: str, exc: Exception) -> None:
 
 def get_database_url() -> str:
     try:
-        return st.secrets.get("DATABASE_URL", DEFAULT_DB)
+        database_url = st.secrets.get("DATABASE_URL", DEFAULT_DB)
+        return database_url or DEFAULT_DB
     except Exception:
         return DEFAULT_DB
 
@@ -596,7 +597,15 @@ def admin_page() -> None:
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
-    init_app()
+    try:
+        init_app()
+    except Exception as exc:
+        st.error("The app could not connect to or initialize the database.")
+        st.info("If this is on Streamlit Cloud, check the DATABASE_URL secret or remove it to use temporary SQLite testing.")
+        with st.expander("Technical details"):
+            st.code(str(exc))
+        st.stop()
+
     user = require_login()
 
     with st.sidebar:
