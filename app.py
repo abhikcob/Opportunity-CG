@@ -431,15 +431,230 @@ def safe_index(values: list[str], value: Any) -> int:
         return 0
 
 
+def clean_text(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def clean_float(value: Any) -> float:
+    if value is None or pd.isna(value) or value == "":
+        return 0.0
+    return float(value)
+
+
+def clean_bool(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return bool(value)
+
+
+def opportunity_row_changed(original: dict[str, Any], edited: dict[str, Any], columns: list[str]) -> bool:
+    for column in columns:
+        original_value = original.get(column)
+        edited_value = edited.get(column)
+        if column in {"probability", "tcv_unweighted", "onshore_hc", "onshore_hc2"}:
+            if clean_float(original_value) != clean_float(edited_value):
+                return True
+        elif column == "fixed_price":
+            if clean_bool(original_value) != clean_bool(edited_value):
+                return True
+        elif clean_text(original_value) != clean_text(edited_value):
+            return True
+    return False
+
+
+def save_opportunities_from_table(original_df: pd.DataFrame, edited_df: pd.DataFrame, user: dict[str, Any]) -> None:
+    editable_columns = [
+        "account",
+        "opportunity",
+        "country",
+        "owner",
+        "probability",
+        "tcv_unweighted",
+        "status",
+        "partners",
+        "priority",
+        "fixed_price",
+        "sector",
+        "firm_named_unnamed",
+        "onshore_hc",
+        "onshore_hc_type",
+        "remarks",
+        "onshore_hc2",
+        "onshore_hc2_type",
+        "remarks2",
+    ]
+    original_by_id = {}
+    if not original_df.empty:
+        original_by_id = {int(row["id"]): row for row in original_df.to_dict("records") if not pd.isna(row["id"])}
+
+    inserted = 0
+    updated = 0
+    for row in edited_df.to_dict("records"):
+        account = clean_text(row.get("account"))
+        opportunity = clean_text(row.get("opportunity"))
+        owner = clean_text(row.get("owner"))
+
+        is_blank_new_row = not account and not opportunity and not owner and pd.isna(row.get("id"))
+        if is_blank_new_row:
+            continue
+
+        if not account or not opportunity or not owner:
+            st.error("Account, Opportunity, and Owner are required for every saved row.")
+            return
+
+        probability = max(0.0, min(100.0, clean_float(row.get("probability"))))
+        tcv_unweighted = clean_float(row.get("tcv_unweighted"))
+        params = {
+            "account": account,
+            "opportunity": opportunity,
+            "country": clean_text(row.get("country")),
+            "owner": owner,
+            "probability": probability,
+            "tcv_unweighted": tcv_unweighted,
+            "weighted_tcv": tcv_unweighted * probability / 100,
+            "status": clean_text(row.get("status")),
+            "partners": clean_text(row.get("partners")),
+            "priority": clean_text(row.get("priority")),
+            "fixed_price": clean_bool(row.get("fixed_price")),
+            "sector": clean_text(row.get("sector")),
+            "firm_named_unnamed": clean_text(row.get("firm_named_unnamed")),
+            "onshore_hc": clean_float(row.get("onshore_hc")),
+            "onshore_hc_type": clean_text(row.get("onshore_hc_type")),
+            "remarks": clean_text(row.get("remarks")),
+            "onshore_hc2": clean_float(row.get("onshore_hc2")),
+            "onshore_hc2_type": clean_text(row.get("onshore_hc2_type")),
+            "remarks2": clean_text(row.get("remarks2")),
+            "updated_by": user["email"],
+            "updated_at": now_iso(),
+        }
+
+        row_id = row.get("id")
+        if row_id is None or pd.isna(row_id):
+            params.update({"created_by": user["email"], "created_at": now_iso()})
+            run_sql(
+                """
+                INSERT INTO opportunities (
+                    account, opportunity, country, owner, probability, tcv_unweighted, weighted_tcv,
+                    status, partners, priority, fixed_price, sector, firm_named_unnamed,
+                    onshore_hc, onshore_hc_type, remarks, onshore_hc2, onshore_hc2_type, remarks2,
+                    created_by, created_at, updated_by, updated_at
+                ) VALUES (
+                    :account, :opportunity, :country, :owner, :probability, :tcv_unweighted, :weighted_tcv,
+                    :status, :partners, :priority, :fixed_price, :sector, :firm_named_unnamed,
+                    :onshore_hc, :onshore_hc_type, :remarks, :onshore_hc2, :onshore_hc2_type, :remarks2,
+                    :created_by, :created_at, :updated_by, :updated_at
+                )
+                """,
+                params,
+            )
+            inserted += 1
+            continue
+
+        existing_id = int(row_id)
+        if existing_id not in original_by_id:
+            continue
+        if not opportunity_row_changed(original_by_id[existing_id], row, editable_columns):
+            continue
+
+        params["id"] = existing_id
+        run_sql(
+            """
+            UPDATE opportunities
+            SET account=:account, opportunity=:opportunity, country=:country, owner=:owner,
+                probability=:probability, tcv_unweighted=:tcv_unweighted, weighted_tcv=:weighted_tcv,
+                status=:status, partners=:partners, priority=:priority, fixed_price=:fixed_price,
+                sector=:sector, firm_named_unnamed=:firm_named_unnamed, onshore_hc=:onshore_hc,
+                onshore_hc_type=:onshore_hc_type, remarks=:remarks, onshore_hc2=:onshore_hc2,
+                onshore_hc2_type=:onshore_hc2_type, remarks2=:remarks2,
+                updated_by=:updated_by, updated_at=:updated_at
+            WHERE id=:id
+            """,
+            params,
+        )
+        updated += 1
+
+    st.cache_data.clear()
+    st.success(f"Saved table changes. Inserted: {inserted}. Updated: {updated}.")
+
+
 def opportunities_page(user: dict[str, Any]) -> None:
     st.subheader("Opportunities")
     df = analysis.filtered_opportunities(read_df)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    table_columns = [
+        "id",
+        "account",
+        "opportunity",
+        "country",
+        "owner",
+        "probability",
+        "tcv_unweighted",
+        "weighted_tcv",
+        "status",
+        "partners",
+        "priority",
+        "fixed_price",
+        "sector",
+        "firm_named_unnamed",
+        "onshore_hc",
+        "onshore_hc_type",
+        "remarks",
+        "onshore_hc2",
+        "onshore_hc2_type",
+        "remarks2",
+        "created_by",
+        "created_at",
+        "updated_by",
+        "updated_at",
+    ]
+    if df.empty:
+        df = pd.DataFrame(columns=table_columns)
+    else:
+        df = df.reindex(columns=table_columns)
 
-    if can_edit(user) and not df.empty:
-        selected_id = st.selectbox("Select ID to edit", df["id"].tolist())
-        selected = df[df["id"] == selected_id].iloc[0].to_dict()
-        opportunity_form(user, selected)
+    if not can_edit(user):
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        return
+
+    st.caption("Edit existing records directly in the table. Use the blank row at the bottom to insert new records.")
+    edited_df = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        disabled=["id", "weighted_tcv", "created_by", "created_at", "updated_by", "updated_at"],
+        column_order=table_columns,
+        column_config={
+            "id": st.column_config.NumberColumn("ID"),
+            "account": st.column_config.TextColumn("Account", required=True),
+            "opportunity": st.column_config.TextColumn("Opportunity", required=True),
+            "country": st.column_config.SelectboxColumn("Country", options=master_values("country")),
+            "owner": st.column_config.SelectboxColumn("Owner", options=master_values("owner"), required=True),
+            "probability": st.column_config.NumberColumn("Probability (%)", min_value=0, max_value=100, step=5),
+            "tcv_unweighted": st.column_config.NumberColumn("TCV Ke Unweighted", min_value=0, step=10),
+            "weighted_tcv": st.column_config.NumberColumn("Weighted TCV"),
+            "status": st.column_config.SelectboxColumn("Status", options=master_values("status")),
+            "partners": st.column_config.TextColumn("Partner(s)"),
+            "priority": st.column_config.SelectboxColumn("Priority", options=master_values("priority")),
+            "fixed_price": st.column_config.CheckboxColumn("Fixed Price"),
+            "sector": st.column_config.SelectboxColumn("Sector", options=master_values("sector")),
+            "firm_named_unnamed": st.column_config.SelectboxColumn("Firm/Named/Unnamed", options=master_values("firm_named_unnamed", include_blank=True)),
+            "onshore_hc": st.column_config.NumberColumn("Onshore HC", min_value=0, step=1),
+            "onshore_hc_type": st.column_config.SelectboxColumn("Onshore HC Type", options=master_values("hc_type", include_blank=True)),
+            "remarks": st.column_config.TextColumn("Remarks"),
+            "onshore_hc2": st.column_config.NumberColumn("Onshore HC2", min_value=0, step=1),
+            "onshore_hc2_type": st.column_config.SelectboxColumn("Onshore HC2 Type", options=master_values("hc_type", include_blank=True)),
+            "remarks2": st.column_config.TextColumn("Remarks2"),
+        },
+    )
+
+    if st.button("Save Table Changes", type="primary"):
+        try:
+            save_opportunities_from_table(df, edited_df, user)
+            st.rerun()
+        except Exception as exc:
+            show_save_error("save table changes", exc)
 
 
 def admin_page() -> None:
@@ -612,8 +827,6 @@ def main() -> None:
         st.title(APP_TITLE)
         st.caption(f"{user['name']} | {user['role']}")
         pages = ["Dashboard", "Opportunities", "Chart Builder"]
-        if can_edit(user):
-            pages.insert(1, "Add Opportunity")
         if can_admin(user):
             pages.append("Admin")
         page = st.radio("Navigation", pages)
@@ -623,8 +836,6 @@ def main() -> None:
 
     if page == "Dashboard":
         analysis.dashboard_page(read_df)
-    elif page == "Add Opportunity":
-        opportunity_form(user)
     elif page == "Opportunities":
         opportunities_page(user)
     elif page == "Chart Builder":

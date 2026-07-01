@@ -11,7 +11,7 @@ Browser Users
 Streamlit App
     |
     +-- Login and role-based access
-    +-- Opportunity create/update forms
+    +-- Opportunity create/update directly in an editable table
     +-- Admin forms for dropdowns and users
     +-- KPI dashboard and chart builder
     |
@@ -34,7 +34,7 @@ Database
 | Role | Access |
 |---|---|
 | Admin | Manage users, dropdowns, opportunities, dashboard, charts |
-| Editor | Add/update opportunities, dashboard, charts |
+| Editor | Add/update opportunities in the table, dashboard, charts |
 | Viewer | Dashboard and charts only |
 
 ## Admin-Controlled Lists
