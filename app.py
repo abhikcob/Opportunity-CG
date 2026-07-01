@@ -449,6 +449,16 @@ def clean_bool(value: Any) -> bool:
     return bool(value)
 
 
+def editor_options(category: str, df: pd.DataFrame, column: str, include_blank: bool = False) -> list[str]:
+    options = master_values(category, include_blank=include_blank)
+    if column in df.columns:
+        existing_values = [clean_text(value) for value in df[column].dropna().unique()]
+        options.extend(value for value in existing_values if value and value not in options)
+    if include_blank and "" not in options:
+        options.insert(0, "")
+    return options
+
+
 def opportunity_row_changed(original: dict[str, Any], edited: dict[str, Any], columns: list[str]) -> bool:
     for column in columns:
         original_value = original.get(column)
@@ -618,6 +628,15 @@ def opportunities_page(user: dict[str, Any]) -> None:
         return
 
     st.caption("Edit existing records directly in the table. Use the blank row at the bottom to insert new records.")
+    country_options = editor_options("country", df, "country")
+    owner_options = editor_options("owner", df, "owner")
+    status_options = editor_options("status", df, "status")
+    priority_options = editor_options("priority", df, "priority")
+    sector_options = editor_options("sector", df, "sector")
+    firm_options = editor_options("firm_named_unnamed", df, "firm_named_unnamed", include_blank=True)
+    hc_type_options = editor_options("hc_type", df, "onshore_hc_type", include_blank=True)
+    hc2_type_options = editor_options("hc_type", df, "onshore_hc2_type", include_blank=True)
+
     edited_df = st.data_editor(
         df,
         use_container_width=True,
@@ -629,22 +648,22 @@ def opportunities_page(user: dict[str, Any]) -> None:
             "id": st.column_config.NumberColumn("ID"),
             "account": st.column_config.TextColumn("Account", required=True),
             "opportunity": st.column_config.TextColumn("Opportunity", required=True),
-            "country": st.column_config.SelectboxColumn("Country", options=master_values("country")),
-            "owner": st.column_config.SelectboxColumn("Owner", options=master_values("owner"), required=True),
+            "country": st.column_config.SelectboxColumn("Country", options=country_options),
+            "owner": st.column_config.SelectboxColumn("Owner", options=owner_options, required=True),
             "probability": st.column_config.NumberColumn("Probability (%)", min_value=0, max_value=100, step=5),
             "tcv_unweighted": st.column_config.NumberColumn("TCV Ke Unweighted", min_value=0, step=10),
             "weighted_tcv": st.column_config.NumberColumn("Weighted TCV"),
-            "status": st.column_config.SelectboxColumn("Status", options=master_values("status")),
+            "status": st.column_config.SelectboxColumn("Status", options=status_options),
             "partners": st.column_config.TextColumn("Partner(s)"),
-            "priority": st.column_config.SelectboxColumn("Priority", options=master_values("priority")),
+            "priority": st.column_config.SelectboxColumn("Priority", options=priority_options),
             "fixed_price": st.column_config.CheckboxColumn("Fixed Price"),
-            "sector": st.column_config.SelectboxColumn("Sector", options=master_values("sector")),
-            "firm_named_unnamed": st.column_config.SelectboxColumn("Firm/Named/Unnamed", options=master_values("firm_named_unnamed", include_blank=True)),
+            "sector": st.column_config.SelectboxColumn("Sector", options=sector_options),
+            "firm_named_unnamed": st.column_config.SelectboxColumn("Firm/Named/Unnamed", options=firm_options),
             "onshore_hc": st.column_config.NumberColumn("Onshore HC", min_value=0, step=1),
-            "onshore_hc_type": st.column_config.SelectboxColumn("Onshore HC Type", options=master_values("hc_type", include_blank=True)),
+            "onshore_hc_type": st.column_config.SelectboxColumn("Onshore HC Type", options=hc_type_options),
             "remarks": st.column_config.TextColumn("Remarks"),
             "onshore_hc2": st.column_config.NumberColumn("Onshore HC2", min_value=0, step=1),
-            "onshore_hc2_type": st.column_config.SelectboxColumn("Onshore HC2 Type", options=master_values("hc_type", include_blank=True)),
+            "onshore_hc2_type": st.column_config.SelectboxColumn("Onshore HC2 Type", options=hc2_type_options),
             "remarks2": st.column_config.TextColumn("Remarks2"),
         },
     )
@@ -834,14 +853,19 @@ def main() -> None:
             st.session_state.clear()
             st.rerun()
 
-    if page == "Dashboard":
-        analysis.dashboard_page(read_df)
-    elif page == "Opportunities":
-        opportunities_page(user)
-    elif page == "Chart Builder":
-        analysis.chart_builder_page(user, read_df, run_sql)
-    elif page == "Admin":
-        admin_page()
+    try:
+        if page == "Dashboard":
+            analysis.dashboard_page(read_df)
+        elif page == "Opportunities":
+            opportunities_page(user)
+        elif page == "Chart Builder":
+            analysis.chart_builder_page(user, read_df, run_sql)
+        elif page == "Admin":
+            admin_page()
+    except Exception as exc:
+        st.error("This page could not be loaded.")
+        with st.expander("Technical details"):
+            st.code(str(exc))
 
 
 if __name__ == "__main__":
